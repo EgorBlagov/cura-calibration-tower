@@ -83,6 +83,7 @@ GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeCommand('G1', [('X', float), 
 GCodeCommand.SET_HOTENT_TEMP_COMMAND = GCodeCommand('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
 GCodeCommand.SET_FLOW_COMMAND = GCodeCommand('M221', [('S', int), ('T', int)])
 GCodeCommand.SET_FEEDRATE = GCodeCommand('M220', [('S', int), ('B', type(None)), ('R', type(None))])
+GCodeCommand.SET_FAN_SPEED = GCodeCommand('M106', [('I', int), ('P', int), ('S', int), ('T', int)])
 
 class GCodeParser:
     def __init__(self, data):
@@ -293,6 +294,10 @@ class SpeedMultiplierProcessor(SingleCommandProcessor):
     def _create_command(self, value):
         return GCodeCommand.SET_FEEDRATE.create(S=int(value))
 
+class FanProcessor(SingleCommandProcessor):
+    def _create_command(self, value):
+        return GCodeCommand.SET_FAN_SPEED.create(S=int(min(100, value) / 100 * 255))
+
 if __name__ == '__main__':
     with open('orig.txt', 'w') as orig:
         orig.write('\n'.join(data))
@@ -303,6 +308,7 @@ if __name__ == '__main__':
                 HotendTempProcessor(160, 10),
                 FlowProcessor(90, 2),
                 SpeedMultiplierProcessor(95, 1),
+                FanProcessor(30, 10)
             ]
         )
         preprocessed.write('\n'.join(p.process_data(data)))
