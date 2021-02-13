@@ -78,8 +78,8 @@ class GCodeCommand:
 
 
 
-GCodeCommand.LINEAR_MOTION_COMMAND = GCodeCommand('G0', [('X', float), ('Y', float), ('Z', float), ('E', float), ('F', float)])
-GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeCommand('G1', [('X', float), ('Y', float), ('Z', float), ('E', float), ('F', float)])
+GCodeCommand.LINEAR_MOTION_COMMAND = GCodeCommand('G0', [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
+GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeCommand('G1', [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
 GCodeCommand.SET_HOTENT_TEMP_COMMAND = GCodeCommand('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
 GCodeCommand.SET_FLOW_COMMAND = GCodeCommand('M221', [('S', int), ('T', int)])
 GCodeCommand.SET_FEEDRATE = GCodeCommand('M220', [('S', int), ('B', type(None)), ('R', type(None))])
@@ -133,8 +133,27 @@ class PrinterHead:
         self.temp = 0
         self.speed_factor = 1.0
         self.fan_speed = 1.0
+        self._is_retracting = False
+        self._is_priming = False
+        self._just_primed = False
+
+    @property
+    def is_retracting(self):
+        return self._is_retracting
+    
+    @property
+    def is_priming(self):
+        return self._is_priming
+
+    @property
+    def just_primed(self):
+        return self._just_primed
 
     def handle(self, line):
+        self._just_primed = self._is_priming
+        self._is_priming = False
+        self._is_retracting = False
+
         parser = GCodeParser(line)
         if not parser:
             return
@@ -146,7 +165,16 @@ class PrinterHead:
         args = command.extract_arguments(parser)
 
         if command in [GCodeCommand.LINEAR_MOTION_COMMAND, GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND]:
+            last_e = self.e
+
             self._handle_linear_motion(args)
+
+            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
+                if not any(k in args for k in 'XYZ') and 'E' in args:
+                    if last_e > self.e:
+                        self._is_retracting = True
+                    if last_e < self.e:
+                        self._is_priming = True
 
         elif command in [GCodeCommand.SET_HOTENT_TEMP_COMMAND]:
             self._handle_set_hotend_temp(args)
@@ -189,12 +217,17 @@ class HeightDetector:
 
     def handle(self, line, head, layer):
         self._just_reached_new_step = False
-        if layer is not None:
-            step = self._calculate_step(line, head, layer)
-            if step != self._current_step:
-                self._just_reached_new_step = True
+        if layer is None:
+            self._current_step = 0
+            return
 
-            self._current_step = step
+        step = self._calculate_step(line, head, layer)
+        if step != self._current_step:
+            self._just_reached_new_step = True
+
+        self._current_step = step
+
+
 
     def normalize(self, current, offset, step):
         result = max(0, current - offset + 1)
@@ -224,8 +257,9 @@ class Processor:
         raise NotImplementedError
 
 class Changes:
-    def __init__(self):
+    def __init__(self, line):
         self.lines_after = []
+        self.line = line
         self.lines_before = []
 
 class CalibrationProcessor:
@@ -250,12 +284,12 @@ class CalibrationProcessor:
                 self.head.handle(line)
                 self.height_detector.handle(line, self.head, current_layer)
 
-                changes = Changes()
+                changes = Changes(line)
                 for processor in self.processors:
                     processor.handle(line, self.height_detector, self.head, changes)
 
                 new_lines += changes.lines_before
-                new_lines.append(line)
+                new_lines.append(changes.line)
                 new_lines += changes.lines_after
 
             new_data.append('\n'.join(new_lines) + '\n')
@@ -290,13 +324,36 @@ class FlowProcessor(SingleCommandProcessor):
     def _create_command(self, value):
         return GCodeCommand.SET_FLOW_COMMAND.create(S=int(value))
 
-class SpeedMultiplierProcessor(SingleCommandProcessor):
+class SpeedProcessor(SingleCommandProcessor):
     def _create_command(self, value):
         return GCodeCommand.SET_FEEDRATE.create(S=int(value))
 
 class FanProcessor(SingleCommandProcessor):
     def _create_command(self, value):
         return GCodeCommand.SET_FAN_SPEED.create(S=int(min(100, value) / 100 * 255))
+
+class PrintSpeedProcessor(Processor):
+    def __init__(self, start, step):
+        self.start = start
+        self.step = step
+
+    def handle(self, line, height_detector, head, changes):
+        if height_detector.current_step:
+            parser = GCodeParser(line)
+            if not parser:
+                return
+
+            command = parser.get_command()
+            if not command:
+                return
+
+            args = command.extract_arguments(parser)
+
+            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
+                if not head.is_priming and not head.is_retracting and ('F' in args or head.just_primed):
+                    args['F'] = head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step)
+                    changes.line = command.create(**args)
+
 
 if __name__ == '__main__':
     with open('orig.txt', 'w') as orig:
@@ -307,8 +364,9 @@ if __name__ == '__main__':
             LayerHeightDetector(2, 3), [
                 HotendTempProcessor(160, 10),
                 FlowProcessor(90, 2),
-                SpeedMultiplierProcessor(95, 1),
-                FanProcessor(30, 10)
+                SpeedProcessor(95, 1),
+                FanProcessor(30, 10),
+                PrintSpeedProcessor(50, 10),
             ]
         )
         preprocessed.write('\n'.join(p.process_data(data)))
