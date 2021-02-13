@@ -241,8 +241,6 @@ class PrinterHead:
         self.e = 0
         self.feedrate = 0
         self.temp = 0
-        self.speed_factor = 1.0
-        self.fan_speed = 1.0
         self.retraction = Retraction()
 
     def handle(self, line):
