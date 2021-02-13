@@ -62,7 +62,7 @@ GCodeDescr.SET_HOTENT_TEMP_COMMAND        = GCodeDescr('M104', [('B', int), ('F'
 GCodeDescr.SET_FLOW_COMMAND               = GCodeDescr('M221', [('S', int), ('T', int)])
 GCodeDescr.SET_FEEDRATE_COMMAND           = GCodeDescr('M220', [('S', int), ('B', type(None)), ('R', type(None))])
 GCodeDescr.SET_FAN_SPEED_COMMAND          = GCodeDescr('M106', [('I', int), ('P', int), ('S', int), ('T', int)])
-
+GCodeDescr.SET_LINEAR_ADVANCE_FACTOR      = GCodeDescr('M900', [('K', float), ('L', float), ('S', int), ('T', int)])
 class GCodeCommand:
     '''
     >>> GCodeCommand.parse('some line')
@@ -419,6 +419,10 @@ class FanProcessor(SingleCommandProcessor):
     def _create_command(self, value):
         return str(GCodeCommand.new(GCodeDescr.SET_FAN_SPEED_COMMAND, S=int(min(100, value) / 100 * 255)))
 
+class LinearAdvanceProcessor(SingleCommandProcessor):
+    def _create_command(self, value):
+        return str(GCodeCommand.new(GCodeDescr.SET_LINEAR_ADVANCE_FACTOR, K=float(value)))
+
 class PrintSpeedProcessor(Processor):
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
@@ -469,6 +473,7 @@ if __name__ == '__main__':
                 PrintSpeedProcessor(50, 10),                
                 RetractionSpeedProcessor(5, 5),
                 RetractionLengthProcessor(10, 1),
+                LinearAdvanceProcessor(0.2, 0.05),
             ]
         )
         preprocessed.write('\n'.join(p.process_data(data)))
