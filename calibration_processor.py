@@ -136,6 +136,7 @@ class PrinterHead:
         self._is_retracting = False
         self._is_priming = False
         self._just_primed = False
+        self._retraction_length = 0
 
     @property
     def is_retracting(self):
@@ -149,10 +150,16 @@ class PrinterHead:
     def just_primed(self):
         return self._just_primed
 
+    @property
+    def retraction_length(self):
+        return self._retraction_length
+    
+
     def handle(self, line):
         self._just_primed = self._is_priming
         self._is_priming = False
         self._is_retracting = False
+        self._retraction_length = 0
 
         parser = GCodeParser(line)
         if not parser:
@@ -173,6 +180,8 @@ class PrinterHead:
                 if not any(k in args for k in 'XYZ') and 'E' in args:
                     if last_e > self.e:
                         self._is_retracting = True
+                        self._retraction_length = last_e - self.e
+
                     if last_e < self.e:
                         self._is_priming = True
 
@@ -351,7 +360,29 @@ class PrintSpeedProcessor(Processor):
 
             if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if not head.is_priming and not head.is_retracting and ('F' in args or head.just_primed):
-                    args['F'] = head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step)
+                    args['F'] = round(head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step), 5)
+                    changes.line = command.create(**args)
+
+class RetractionLengthProcessor(Processor):
+    def __init__(self, start, step):
+        self.start = start
+        self.step = step
+
+    def handle(self, line, height_detector, head, changes):
+        if height_detector.current_step:
+            parser = GCodeParser(line)
+            if not parser:
+                return
+
+            command = parser.get_command()
+            if not command:
+                return
+
+            args = command.extract_arguments(parser)
+
+            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
+                if head.is_retracting:
+                    args['E'] = round(head.e + head.retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
                     changes.line = command.create(**args)
 
 
@@ -366,7 +397,8 @@ if __name__ == '__main__':
                 FlowProcessor(90, 2),
                 SpeedProcessor(95, 1),
                 FanProcessor(30, 10),
-                PrintSpeedProcessor(50, 10),
+                # PrintSpeedProcessor(50, 10),
+                RetractionLengthProcessor(10, 1),
             ]
         )
         preprocessed.write('\n'.join(p.process_data(data)))
