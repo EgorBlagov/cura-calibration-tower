@@ -333,6 +333,13 @@ class MillimeterHeightDetector(HeightDetector):
         return self._current_step
 
 class Processor:
+    def __init__(self, start, step):
+        self.start = start
+        self.step = step
+
+    def _get_current_value(self, current_step):
+        return self.start + (current_step - 1) * self.step
+
     def handle(self, marker, height_detector, head):
         raise NotImplementedError
 
@@ -390,7 +397,7 @@ class SingleCommandProcessor(Processor):
 
     def handle(self, marker, height_detector, head):
         if height_detector.just_reached_new_step:
-            value = (self.start + (height_detector.current_step - 1) * self.step)
+            value = self._get_current_value(height_detector.current_step)
             marker.lines_before.append(self._create_command(value))
 
     def _create_command(self, value):
@@ -413,37 +420,30 @@ class FanProcessor(SingleCommandProcessor):
         return str(GCodeCommand.new(GCodeDescr.SET_FAN_SPEED_COMMAND, S=int(min(100, value) / 100 * 255)))
 
 class PrintSpeedProcessor(Processor):
-    def __init__(self, start, step):
-        self.start = start
-        self.step = step
-
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
             cmd = GCodeCommand.parse(marker.line)
 
             if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if head.retraction.state == Retraction.JUST_PRIMED or (head.retraction.state == Retraction.NONE and 'F' in cmd.args):
-                    cmd.args['F'] = round(head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step), 5)
+                    cmd.args['F'] = head.feedrate / 100 * self._get_current_value(height_detector.current_step)
                     marker.line = str(cmd)
 
 class RetractionLengthProcessor(Processor):
-    def __init__(self, start, step):
-        self.start = start
-        self.step = step
-
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
             cmd = GCodeCommand.parse(marker.line)
 
             if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if head.retraction.state == Retraction.RETRACTING:
-                    cmd.args['E'] = round(head.e + head.retraction.last_retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
+                    cmd.args['E'] = head.e + head.retraction.last_retraction_length - self._get_current_value(height_detector.current_step)
                     marker.line = str(cmd)
 
 class RetractionSpeedProcessor(Processor):
     def __init__(self, start, step):
-        self.start = start * 60.0
-        self.step = step * 60.0
+        super().__init__(start, step)
+        self.start *= 60.0
+        self.step *= 60.0
 
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
@@ -451,7 +451,7 @@ class RetractionSpeedProcessor(Processor):
 
             if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if head.retraction.state in [Retraction.RETRACTING, Retraction.PRIMING]:
-                    cmd.args['F'] = round(self.start + (height_detector.current_step - 1) * self.step, 5)
+                    cmd.args['F'] = self._get_current_value(height_detector.current_step)
                     marker.line = str(cmd)
                     marker.lines_after.append(str(GCodeCommand.new(GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND, F=head.feedrate)))
 
