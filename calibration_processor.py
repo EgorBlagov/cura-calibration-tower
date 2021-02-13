@@ -31,96 +31,167 @@ data = [
 ]
 
 import re
+from collections import OrderedDict
 
-class GCodeCommand:
+class GCodeDescr:
     def __init__(self, code, arguments):
         self.code = code
-        self.arguments = {k: t for k, t in arguments}
+        self.arguments = OrderedDict(arguments)
 
     @staticmethod
     def get_all_commands():
         result = []
-        for param in dir(GCodeCommand):
+        for param in dir(GCodeDescr):
             if param.endswith('_COMMAND'):
-                result.append(getattr(GCodeCommand, param))
+                result.append(getattr(GCodeDescr, param))
 
         return result
 
-    def extract_arguments(self, parser):
-        result = {}
-        for arg, _type in self.arguments.items():
-            if arg in parser.arguments:
-                result[arg] = None if _type == type(None) else _type(parser.arguments[arg])
+    @staticmethod
+    def get(code):
+        for c in GCodeDescr.get_all_commands():
+            if c.code == code:
+                return c
+
+        return None
+
+
+GCodeDescr.LINEAR_MOTION_COMMAND          = GCodeDescr('G0',   [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
+GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeDescr('G1',   [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
+GCodeDescr.SET_HOTENT_TEMP_COMMAND        = GCodeDescr('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
+GCodeDescr.SET_FLOW_COMMAND               = GCodeDescr('M221', [('S', int), ('T', int)])
+GCodeDescr.SET_FEEDRATE_COMMAND           = GCodeDescr('M220', [('S', int), ('B', type(None)), ('R', type(None))])
+GCodeDescr.SET_FAN_SPEED_COMMAND          = GCodeDescr('M106', [('I', int), ('P', int), ('S', int), ('T', int)])
+
+class GCodeCommand:
+    '''
+    >>> GCodeCommand.parse('some line')
+    Traceback (most recent call last):
+      File "<stdin>", line 1, in <module>
+      File "test.py", line 136, in parse
+        raise ValueError('Invalid GCode "{}"'.format(line))
+    ValueError: Invalid GCode "some line"
+
+    >>> x = GCodeCommand.parse('G0 F10 E20 X10; what is that')
+    >>> assert x.code == 'G0'
+    >>> assert x.args == {'F': 10.0, 'E': 20.0, 'X': 10.0}
+    >>> assert str(x) == 'G0 F10.0 X10.0 E20.0; what is that', '{} != {}'.format(str(x), 'G0 F10.0 E20.0 X10.0; what is that')
+    >>> assert x.comment == ' what is that'
+    >>> assert x.command == GCodeDescr.LINEAR_MOTION_COMMAND
+
+    >>> x = GCodeCommand.new(GCodeDescr.LINEAR_MOTION_COMMAND, F=10.0)
+    >>> assert x.code == 'G0'
+    >>> assert x.args == {'F': 10.0}
+    >>> assert str(x) == 'G0 F10.0'
+    >>> assert x.comment == ''
+    >>> x.comment = 'heh'
+    >>> assert str(x) == 'G0 F10.0;heh'
+
+    >>> x = GCodeCommand.parse(';Some Comment line')
+    >>> assert x.comment == 'Some Comment line'
+    >>> assert x.code == None
+    >>> assert x.args == {}
+    >>> assert str(x) == ';Some Comment line'
+
+    >>> x = GCodeCommand.new_comment('comment')
+    >>> assert str(x) == ';comment'
+    >>> assert x.comment == 'comment'
+
+    >>> x = GCodeCommand.new(GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND, comment='constructor comment', X=10.0, Y=20.0, E=120.0)
+    >>> assert x.comment == 'constructor comment'
+    >>> assert x.args == {'X': 10.0, 'Y': 20.0, 'E': 120.0}
+    >>> assert x.code == 'G1'
+    '''
+
+    PRECISION = 5
+
+    def __init__(self, code=None, args=None, comment=''):
+        self.code = code
+        self.args = args if args else {}
+        self.comment = comment
+
+    @property
+    def command(self):
+        if self.code is None:
+            return None
+
+        return GCodeDescr.get(self.code)
+    
+
+    def __str__(self):
+        result = ''
+        if self.code:
+            result += self.code
+
+        if self.args:
+            for k, v in self.args.items():
+                result += ' {}{}'.format(k, round(v, GCodeCommand.PRECISION))
+
+        if self.comment:
+            result += ';{}'.format(self.comment)
 
         return result
 
-    def create(self, **kwargs):
+    @staticmethod
+    def parse(line):
+        if not line:
+            return GCodeCommand()
+
+        if line[0] not in "GM;":
+            raise ValueError('Invalid GCode "{}"'.format(line))
+
+        command_tokens = line.split(';')
+        tokens = [t for t in command_tokens[0].split(' ') if t] # split into non empty tokens
+        comment = ' '.join(command_tokens[1:])
+
+        if not tokens:
+            return GCodeCommand(comment=comment)
+
+        code = tokens[0]
+        command = GCodeDescr.get(code)
+
+        if command is None:
+            raise ValueError('Unsupported GCode "{}"'.format(line))
+
+        args = {}
+        for arg, _type in command.arguments.items():
+            for t in tokens[1:]:
+                given_name = t[0]
+                given_value = t[1:] if t[1:] else None
+
+                if given_name == arg:
+                    args[arg] = None if _type == type(None) else _type(given_value)
+                    break
+
+        return GCodeCommand(code=code, comment=comment, args=args)
+
+        
+    @staticmethod
+    def new_comment(comment):
+        return GCodeCommand(comment=comment)
+
+    @staticmethod
+    def new(command, comment='', **kwargs):
         result_args = {}
         for arg, value in kwargs.items():
-            if arg not in self.arguments:
+            if arg not in command.arguments:
                 raise ValueError('Invalid argument {} for command {}, supported are: {}'.format(
                     arg,
-                    self.code,
-                    ', '.join(list(self.arguments))
+                    command.code,
+                    ', '.join(list(command.arguments))
                 ))
 
-            if type(value) != self.arguments[arg]:
+            if type(value) != command.arguments[arg]:
                 raise ValueError('Invalid argument type for command {}, argument {} must be {}, but it is {}'.format(
-                    self.code,
+                    command.code,
                     arg,
-                    self.arguments[arg],
+                    command.arguments[arg],
                     type(value)
                 ))
 
             result_args[arg] = value
 
-        return ' '.join([self.code] + ['{}{}'.format(name, value if value is not None else '') for name, value in result_args.items()])
-
-
-
-GCodeCommand.LINEAR_MOTION_COMMAND = GCodeCommand('G0', [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
-GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeCommand('G1', [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
-GCodeCommand.SET_HOTENT_TEMP_COMMAND = GCodeCommand('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
-GCodeCommand.SET_FLOW_COMMAND = GCodeCommand('M221', [('S', int), ('T', int)])
-GCodeCommand.SET_FEEDRATE = GCodeCommand('M220', [('S', int), ('B', type(None)), ('R', type(None))])
-GCodeCommand.SET_FAN_SPEED = GCodeCommand('M106', [('I', int), ('P', int), ('S', int), ('T', int)])
-
-class GCodeParser:
-    def __init__(self, data):
-        self.command = None
-        self.arguments = {}
-        self._parse(data)
-
-    def __str__(self):
-        return "Command: {}, Arguments: {}".format(
-            self.command,
-            ', '.join(['{}: {}'.format(n, v) for n, v in self.arguments.items()])
-        )
-
-    def __bool__(self):
-        return self.command is not None
-
-    def get_command(self):
-        for command in GCodeCommand.get_all_commands():
-            if command.code == self.command:
-                return command
-
-        return None
-
-    def _parse(self, data):
-        if not data:
-            return
-
-        if data[0] not in "GM":
-            return
-
-        data = data.split(';')[0] # remove comment
-        tokens = [t for t in data.split(' ') if t] # split into non empty tokens
-        self.command = tokens[0]
-        for t in tokens[1:]:
-            name, value = t[:1], t[1:]
-            self.arguments[name] = value if value else None
-
+        return GCodeCommand(code=command.code, comment=comment, args=result_args)
 
 
 class PrinterHead:
@@ -161,32 +232,27 @@ class PrinterHead:
         self._is_retracting = False
         self._retraction_length = 0
 
-        parser = GCodeParser(line)
-        if not parser:
-            return
+        try:
+            cmd = GCodeCommand.parse(line)
 
-        command = parser.get_command()
-        if not command:
-            return
+            if cmd.command in [GCodeDescr.LINEAR_MOTION_COMMAND, GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND]:
+                last_e = self.e
 
-        args = command.extract_arguments(parser)
+                self._handle_linear_motion(cmd.args)
 
-        if command in [GCodeCommand.LINEAR_MOTION_COMMAND, GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND]:
-            last_e = self.e
+                if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
+                    if not any(k in cmd.args for k in 'XYZ') and 'E' in cmd.args:
+                        if last_e > self.e:
+                            self._is_retracting = True
+                            self._retraction_length = last_e - self.e
 
-            self._handle_linear_motion(args)
+                        if last_e < self.e:
+                            self._is_priming = True
 
-            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
-                if not any(k in args for k in 'XYZ') and 'E' in args:
-                    if last_e > self.e:
-                        self._is_retracting = True
-                        self._retraction_length = last_e - self.e
-
-                    if last_e < self.e:
-                        self._is_priming = True
-
-        elif command in [GCodeCommand.SET_HOTENT_TEMP_COMMAND]:
-            self._handle_set_hotend_temp(args)
+            elif cmd.command in [GCodeDescr.SET_HOTENT_TEMP_COMMAND]:
+                self._handle_set_hotend_temp(cmd.args)
+        except:
+            pass
 
     def _handle_linear_motion(self, args):
         if 'X' in args:
@@ -327,19 +393,19 @@ class SingleCommandProcessor(Processor):
 
 class HotendTempProcessor(SingleCommandProcessor):
     def _create_command(self, value):
-        return GCodeCommand.SET_HOTENT_TEMP_COMMAND.create(S=int(value))
+        return str(GCodeCommand.new(GCodeDescr.SET_HOTENT_TEMP_COMMAND, S=int(value)))
 
 class FlowProcessor(SingleCommandProcessor):
     def _create_command(self, value):
-        return GCodeCommand.SET_FLOW_COMMAND.create(S=int(value))
+        return str(GCodeCommand.new(GCodeDescr.SET_FLOW_COMMAND, S=int(value)))
 
 class SpeedProcessor(SingleCommandProcessor):
     def _create_command(self, value):
-        return GCodeCommand.SET_FEEDRATE.create(S=int(value))
+        return str(GCodeCommand.new(GCodeDescr.SET_FEEDRATE_COMMAND, S=int(value)))
 
 class FanProcessor(SingleCommandProcessor):
     def _create_command(self, value):
-        return GCodeCommand.SET_FAN_SPEED.create(S=int(min(100, value) / 100 * 255))
+        return str(GCodeCommand.new(GCodeDescr.SET_FAN_SPEED_COMMAND, S=int(min(100, value) / 100 * 255)))
 
 class PrintSpeedProcessor(Processor):
     def __init__(self, start, step):
@@ -348,20 +414,12 @@ class PrintSpeedProcessor(Processor):
 
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
-            parser = GCodeParser(marker.line)
-            if not parser:
-                return
+            cmd = GCodeCommand.parse(marker.line)
 
-            command = parser.get_command()
-            if not command:
-                return
-
-            args = command.extract_arguments(parser)
-
-            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
-                if not head.is_priming and not head.is_retracting and ('F' in args or head.just_primed):
-                    args['F'] = round(head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step), 5)
-                    marker.line = command.create(**args)
+            if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
+                if not head.is_priming and not head.is_retracting and ('F' in cmd.args or head.just_primed):
+                    cmd.args['F'] = round(head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step), 5)
+                    marker.line = str(cmd)
 
 class RetractionLengthProcessor(Processor):
     def __init__(self, start, step):
@@ -370,20 +428,12 @@ class RetractionLengthProcessor(Processor):
 
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
-            parser = GCodeParser(marker.line)
-            if not parser:
-                return
+            cmd = GCodeCommand.parse(marker.line)
 
-            command = parser.get_command()
-            if not command:
-                return
-
-            args = command.extract_arguments(parser)
-
-            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
+            if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if head.is_retracting:
-                    args['E'] = round(head.e + head.retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
-                    marker.line = command.create(**args)
+                    cmd.args['E'] = round(head.e + head.retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
+                    marker.line = str(cmd)
 
 class RetractionSpeedProcessor(Processor):
     def __init__(self, start, step):
@@ -392,21 +442,13 @@ class RetractionSpeedProcessor(Processor):
 
     def handle(self, marker, height_detector, head):
         if height_detector.current_step:
-            parser = GCodeParser(marker.line)
-            if not parser:
-                return
+            cmd = GCodeCommand.parse(marker.line)
 
-            command = parser.get_command()
-            if not command:
-                return
-
-            args = command.extract_arguments(parser)
-
-            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
+            if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if head.is_retracting or head.is_priming:
-                    args['F'] = round(self.start + (height_detector.current_step - 1) * self.step, 5)
-                    marker.line = command.create(**args)
-                    marker.lines_after.append(GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND.create(F=head.feedrate))
+                    cmd.args['F'] = round(self.start + (height_detector.current_step - 1) * self.step, 5)
+                    marker.line = str(cmd)
+                    marker.lines_after.append(str(GCodeCommand.new(GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND, F=head.feedrate)))
 
 if __name__ == '__main__':
     with open('orig.txt', 'w') as orig:
