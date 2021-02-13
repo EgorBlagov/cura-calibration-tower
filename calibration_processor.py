@@ -82,6 +82,7 @@ GCodeCommand.LINEAR_MOTION_COMMAND = GCodeCommand('G0', [('X', float), ('Y', flo
 GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeCommand('G1', [('X', float), ('Y', float), ('Z', float), ('E', float), ('F', float)])
 GCodeCommand.SET_HOTENT_TEMP_COMMAND = GCodeCommand('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
 GCodeCommand.SET_FLOW_COMMAND = GCodeCommand('M221', [('S', int), ('T', int)])
+GCodeCommand.SET_FEEDRATE = GCodeCommand('M220', [('S', int), ('B', type(None)), ('R', type(None))])
 
 class GCodeParser:
     def __init__(self, data):
@@ -288,6 +289,10 @@ class FlowProcessor(SingleCommandProcessor):
     def _create_command(self, value):
         return GCodeCommand.SET_FLOW_COMMAND.create(S=int(value))
 
+class SpeedMultiplierProcessor(SingleCommandProcessor):
+    def _create_command(self, value):
+        return GCodeCommand.SET_FEEDRATE.create(S=int(value))
+
 if __name__ == '__main__':
     with open('orig.txt', 'w') as orig:
         orig.write('\n'.join(data))
@@ -296,7 +301,8 @@ if __name__ == '__main__':
         p = CalibrationProcessor(
             LayerHeightDetector(2, 3), [
                 HotendTempProcessor(160, 10),
-                FlowProcessor(90, 2)
+                FlowProcessor(90, 2),
+                SpeedMultiplierProcessor(95, 1),
             ]
         )
         preprocessed.write('\n'.join(p.process_data(data)))
