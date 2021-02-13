@@ -31,6 +31,7 @@ data = [
 ]
 
 import re
+
 class GCodeCommand:
     def __init__(self, code, arguments):
         self.code = code
@@ -170,22 +171,6 @@ class PrinterHead:
 
 
 class HeightDetector:
-    @property
-    def just_reached_new_step(self):
-        raise NotImplementedError
-
-    @property
-    def current_step(self):
-        raise NotImplementedError
-
-    def handle(self, line, head, layer):
-        raise NotImplementedError
-
-    def normalize(self, current, offset, step):
-        result = max(0, current - offset + 1)
-        return (result + step - 1) // step
-
-class LayerHeightDetector(HeightDetector):
     def __init__(self, offset, step_size):
         self._offset = offset
         self._step_size = step_size
@@ -203,38 +188,34 @@ class LayerHeightDetector(HeightDetector):
     def handle(self, line, head, layer):
         self._just_reached_new_step = False
         if layer is not None:
-            step = self.normalize(layer, self._offset, self._step_size)
+            step = self._calculate_step(line, head, layer)
             if step != self._current_step:
                 self._just_reached_new_step = True
 
             self._current_step = step
+
+    def normalize(self, current, offset, step):
+        result = max(0, current - offset + 1)
+        return (result + step - 1) // step
+
+    def _calculate_step(self, line, head, layer):
+        raise NotImplementedError
+
+class LayerHeightDetector(HeightDetector):
+    def _calculate_step(self, line, head, layer):
+        return self.normalize(layer, self._offset, self._step_size)
 
 class MillimeterHeightDetector(HeightDetector):
     def __init__(self, offset, step_size):
-        self._offset = offset
-        self._step_size = step_size
-        self._just_reached_new_step = False
-        self._current_step = 0
+        super().__init__(offset, step_size)
         self._last_z = 0
-
-    @property
-    def just_reached_new_step(self):
-        return self._just_reached_new_step
     
-    @property
-    def current_step(self):
-        return self._current_step
-    
-    def handle(self, line, head, layer):
-        self._just_reached_new_step = False
-        if layer is not None and head.z != self._last_z:
+    def _calculate_step(self, line, head, layer):
+        if head.z != self._last_z:
             self._last_z = head.z
-            step = self.normalize(self._last_z, self._offset, self._step_size)
-            if step != self._current_step:
-                self._just_reached_new_step = True
+            return self.normalize(self._last_z, self._offset, self._step_size)
 
-            self._current_step = step
-
+        return self._current_step
 
 class Processor:
     def handle(self, line, height_detector, head, changes):
@@ -302,7 +283,7 @@ if __name__ == '__main__':
 
     with open('preprocessed.txt', 'w') as preprocessed:
         p = CalibrationProcessor(
-            MillimeterHeightDetector(2, 3), [
+            LayerHeightDetector(2, 3), [
                 HotendTempProcessor(160, 10)
             ]
         )
