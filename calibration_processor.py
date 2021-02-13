@@ -81,7 +81,7 @@ class GCodeCommand:
 GCodeCommand.LINEAR_MOTION_COMMAND = GCodeCommand('G0', [('X', float), ('Y', float), ('Z', float), ('E', float), ('F', float)])
 GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeCommand('G1', [('X', float), ('Y', float), ('Z', float), ('E', float), ('F', float)])
 GCodeCommand.SET_HOTENT_TEMP_COMMAND = GCodeCommand('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
-
+GCodeCommand.SET_FLOW_COMMAND = GCodeCommand('M221', [('S', int), ('T', int)])
 
 class GCodeParser:
     def __init__(self, data):
@@ -267,7 +267,7 @@ class CalibrationProcessor:
 
         return None
 
-class HotendTempProcessor(Processor):
+class SingleCommandProcessor(Processor):
     def __init__(self, start, step):
         self.start = start
         self.step = step
@@ -275,7 +275,18 @@ class HotendTempProcessor(Processor):
     def handle(self, line, height_detector, head, changes):
         if height_detector.just_reached_new_step:
             value = (self.start + (height_detector.current_step - 1) * self.step)
-            changes.lines_before.append(GCodeCommand.SET_HOTENT_TEMP_COMMAND.create(S=int(value)))
+            changes.lines_before.append(self._create_command(value))
+
+    def _create_command(self, value):
+        raise NotImplementedError
+
+class HotendTempProcessor(SingleCommandProcessor):
+    def _create_command(self, value):
+        return GCodeCommand.SET_HOTENT_TEMP_COMMAND.create(S=int(value))
+
+class FlowProcessor(SingleCommandProcessor):
+    def _create_command(self, value):
+        return GCodeCommand.SET_FLOW_COMMAND.create(S=int(value))
 
 if __name__ == '__main__':
     with open('orig.txt', 'w') as orig:
@@ -284,7 +295,8 @@ if __name__ == '__main__':
     with open('preprocessed.txt', 'w') as preprocessed:
         p = CalibrationProcessor(
             LayerHeightDetector(2, 3), [
-                HotendTempProcessor(160, 10)
+                HotendTempProcessor(160, 10),
+                FlowProcessor(90, 2)
             ]
         )
         preprocessed.write('\n'.join(p.process_data(data)))
