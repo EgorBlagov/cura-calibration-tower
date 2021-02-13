@@ -262,10 +262,10 @@ class MillimeterHeightDetector(HeightDetector):
         return self._current_step
 
 class Processor:
-    def handle(self, line, height_detector, head, changes):
+    def handle(self, marker, height_detector, head):
         raise NotImplementedError
 
-class Changes:
+class Marker:
     def __init__(self, line):
         self.lines_after = []
         self.line = line
@@ -293,13 +293,13 @@ class CalibrationProcessor:
                 self.head.handle(line)
                 self.height_detector.handle(line, self.head, current_layer)
 
-                changes = Changes(line)
+                marker = Marker(line)
                 for processor in self.processors:
-                    processor.handle(line, self.height_detector, self.head, changes)
+                    processor.handle(marker, self.height_detector, self.head)
 
-                new_lines += changes.lines_before
-                new_lines.append(changes.line)
-                new_lines += changes.lines_after
+                new_lines += marker.lines_before
+                new_lines.append(marker.line)
+                new_lines += marker.lines_after
 
             new_data.append('\n'.join(new_lines) + '\n')
 
@@ -317,10 +317,10 @@ class SingleCommandProcessor(Processor):
         self.start = start
         self.step = step
 
-    def handle(self, line, height_detector, head, changes):
+    def handle(self, marker, height_detector, head):
         if height_detector.just_reached_new_step:
             value = (self.start + (height_detector.current_step - 1) * self.step)
-            changes.lines_before.append(self._create_command(value))
+            marker.lines_before.append(self._create_command(value))
 
     def _create_command(self, value):
         raise NotImplementedError
@@ -346,9 +346,9 @@ class PrintSpeedProcessor(Processor):
         self.start = start
         self.step = step
 
-    def handle(self, line, height_detector, head, changes):
+    def handle(self, marker, height_detector, head):
         if height_detector.current_step:
-            parser = GCodeParser(line)
+            parser = GCodeParser(marker.line)
             if not parser:
                 return
 
@@ -361,16 +361,16 @@ class PrintSpeedProcessor(Processor):
             if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if not head.is_priming and not head.is_retracting and ('F' in args or head.just_primed):
                     args['F'] = round(head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step), 5)
-                    changes.line = command.create(**args)
+                    marker.line = command.create(**args)
 
 class RetractionLengthProcessor(Processor):
     def __init__(self, start, step):
         self.start = start
         self.step = step
 
-    def handle(self, line, height_detector, head, changes):
+    def handle(self, marker, height_detector, head):
         if height_detector.current_step:
-            parser = GCodeParser(line)
+            parser = GCodeParser(marker.line)
             if not parser:
                 return
 
@@ -383,8 +383,30 @@ class RetractionLengthProcessor(Processor):
             if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
                 if head.is_retracting:
                     args['E'] = round(head.e + head.retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
-                    changes.line = command.create(**args)
+                    marker.line = command.create(**args)
 
+class RetractionSpeedProcessor(Processor):
+    def __init__(self, start, step):
+        self.start = start * 60.0
+        self.step = step * 60.0
+
+    def handle(self, marker, height_detector, head):
+        if height_detector.current_step:
+            parser = GCodeParser(marker.line)
+            if not parser:
+                return
+
+            command = parser.get_command()
+            if not command:
+                return
+
+            args = command.extract_arguments(parser)
+
+            if command == GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND:
+                if head.is_retracting or head.is_priming:
+                    args['F'] = round(self.start + (height_detector.current_step - 1) * self.step, 5)
+                    marker.line = command.create(**args)
+                    marker.lines_after.append(GCodeCommand.LINEAR_MOTION_EXTRUDED_COMMAND.create(F=head.feedrate))
 
 if __name__ == '__main__':
     with open('orig.txt', 'w') as orig:
@@ -397,7 +419,8 @@ if __name__ == '__main__':
                 FlowProcessor(90, 2),
                 SpeedProcessor(95, 1),
                 FanProcessor(30, 10),
-                # PrintSpeedProcessor(50, 10),
+                PrintSpeedProcessor(50, 10),                
+                RetractionSpeedProcessor(5, 5),
                 RetractionLengthProcessor(10, 1),
             ]
         )
