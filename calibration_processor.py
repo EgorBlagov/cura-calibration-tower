@@ -194,6 +194,45 @@ class GCodeCommand:
         return GCodeCommand(code=command.code, comment=comment, args=result_args)
 
 
+class Retraction:
+    NONE, RETRACTING, PRIMING, JUST_PRIMED = range(4)
+    def __init__(self):
+        self._last_e = 0
+        self._e = 0
+        self._last_retract = 0
+        self._state = Retraction.NONE
+
+    @property
+    def last_retraction_length(self):
+        return self._last_retract
+
+    @property
+    def state(self):
+        return self._state
+
+    def handle_new_line(self):
+        if self._state == Retraction.PRIMING:
+            self._state = Retraction.JUST_PRIMED
+        elif self._state == Retraction.JUST_PRIMED:
+            self._state = Retraction.NONE
+
+    def handle_linear_motion(self, cmd):
+        if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
+            if 'E' in cmd.args:
+                self._update_e(cmd.args['E'])
+
+            if not any(k in cmd.args for k in 'XYZ') and 'E' in cmd.args:
+                if self._last_e > self._e:
+                    self._state = Retraction.RETRACTING
+                    self._last_retract = self._last_e - self._e
+
+                elif self._last_e < self._e:
+                    self._state = Retraction.PRIMING
+
+    def _update_e(self, new_e):
+        self._last_e = self._e
+        self._e = new_e
+
 class PrinterHead:
     def __init__(self):
         self.x = 0
@@ -204,51 +243,17 @@ class PrinterHead:
         self.temp = 0
         self.speed_factor = 1.0
         self.fan_speed = 1.0
-        self._is_retracting = False
-        self._is_priming = False
-        self._just_primed = False
-        self._retraction_length = 0
-
-    @property
-    def is_retracting(self):
-        return self._is_retracting
-    
-    @property
-    def is_priming(self):
-        return self._is_priming
-
-    @property
-    def just_primed(self):
-        return self._just_primed
-
-    @property
-    def retraction_length(self):
-        return self._retraction_length
-    
+        self.retraction = Retraction()
 
     def handle(self, line):
-        self._just_primed = self._is_priming
-        self._is_priming = False
-        self._is_retracting = False
-        self._retraction_length = 0
+        self.retraction.handle_new_line()
 
         try:
             cmd = GCodeCommand.parse(line)
 
             if cmd.command in [GCodeDescr.LINEAR_MOTION_COMMAND, GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND]:
-                last_e = self.e
-
                 self._handle_linear_motion(cmd.args)
-
-                if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
-                    if not any(k in cmd.args for k in 'XYZ') and 'E' in cmd.args:
-                        if last_e > self.e:
-                            self._is_retracting = True
-                            self._retraction_length = last_e - self.e
-
-                        if last_e < self.e:
-                            self._is_priming = True
-
+                self.retraction.handle_linear_motion(cmd)
             elif cmd.command in [GCodeDescr.SET_HOTENT_TEMP_COMMAND]:
                 self._handle_set_hotend_temp(cmd.args)
         except:
@@ -417,7 +422,7 @@ class PrintSpeedProcessor(Processor):
             cmd = GCodeCommand.parse(marker.line)
 
             if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
-                if not head.is_priming and not head.is_retracting and ('F' in cmd.args or head.just_primed):
+                if head.retraction.state == Retraction.JUST_PRIMED or (head.retraction.state == Retraction.NONE and 'F' in cmd.args):
                     cmd.args['F'] = round(head.feedrate / 100 * (self.start + (height_detector.current_step - 1) * self.step), 5)
                     marker.line = str(cmd)
 
@@ -431,8 +436,8 @@ class RetractionLengthProcessor(Processor):
             cmd = GCodeCommand.parse(marker.line)
 
             if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
-                if head.is_retracting:
-                    cmd.args['E'] = round(head.e + head.retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
+                if head.retraction.state == Retraction.RETRACTING:
+                    cmd.args['E'] = round(head.e + head.retraction.last_retraction_length - (self.start + (height_detector.current_step - 1) * self.step), 5)
                     marker.line = str(cmd)
 
 class RetractionSpeedProcessor(Processor):
@@ -445,7 +450,7 @@ class RetractionSpeedProcessor(Processor):
             cmd = GCodeCommand.parse(marker.line)
 
             if cmd.command == GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND:
-                if head.is_retracting or head.is_priming:
+                if head.retraction.state in [Retraction.RETRACTING, Retraction.PRIMING]:
                     cmd.args['F'] = round(self.start + (height_detector.current_step - 1) * self.step, 5)
                     marker.line = str(cmd)
                     marker.lines_after.append(str(GCodeCommand.new(GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND, F=head.feedrate)))
