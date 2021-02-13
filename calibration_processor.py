@@ -178,7 +178,7 @@ class HeightDetector:
     def current_step(self):
         raise NotImplementedError
 
-    def handle(self, line, head):
+    def handle(self, line, head, layer):
         raise NotImplementedError
 
     def normalize(self, current, offset, step):
@@ -200,12 +200,36 @@ class LayerHeightDetector(HeightDetector):
     def current_step(self):
         return self._current_step
 
-    def handle(self, line, head):
+    def handle(self, line, head, layer):
         self._just_reached_new_step = False
-        m = re.match(r'^;LAYER:(\d+)', line)
-        if m:
-            layer_number = int(m.group(1))
-            step = self.normalize(layer_number, self._offset, self._step_size)
+        if layer is not None:
+            step = self.normalize(layer, self._offset, self._step_size)
+            if step != self._current_step:
+                self._just_reached_new_step = True
+
+            self._current_step = step
+
+class MillimeterHeightDetector(HeightDetector):
+    def __init__(self, offset, step_size):
+        self._offset = offset
+        self._step_size = step_size
+        self._just_reached_new_step = False
+        self._current_step = 0
+        self._last_z = 0
+
+    @property
+    def just_reached_new_step(self):
+        return self._just_reached_new_step
+    
+    @property
+    def current_step(self):
+        return self._current_step
+    
+    def handle(self, line, head, layer):
+        self._just_reached_new_step = False
+        if layer is not None and head.z != self._last_z:
+            self._last_z = head.z
+            step = self.normalize(self._last_z, self._offset, self._step_size)
             if step != self._current_step:
                 self._just_reached_new_step = True
 
@@ -231,13 +255,17 @@ class CalibrationProcessor:
         new_data = []
         for group in data:
             new_lines = []
+            current_layer = None
             for line in group.split('\n'):
                 line = line.strip()
                 if not line:
                     continue
 
+                if current_layer is None:
+                    current_layer = self._check_layer(line)
+
                 self.head.handle(line)
-                self.height_detector.handle(line, self.head)
+                self.height_detector.handle(line, self.head, current_layer)
 
                 changes = Changes()
                 for processor in self.processors:
@@ -250,6 +278,13 @@ class CalibrationProcessor:
             new_data.append('\n'.join(new_lines) + '\n')
 
         return new_data
+
+    def _check_layer(self, line):
+        m = re.match(r'^;LAYER:(\d+)', line)
+        if m:
+            return int(m.group(1))
+
+        return None
 
 class HotendTempProcessor(Processor):
     def __init__(self, start, step):
@@ -267,7 +302,7 @@ if __name__ == '__main__':
 
     with open('preprocessed.txt', 'w') as preprocessed:
         p = CalibrationProcessor(
-            LayerHeightDetector(3, 7), [
+            MillimeterHeightDetector(2, 3), [
                 HotendTempProcessor(160, 10)
             ]
         )
