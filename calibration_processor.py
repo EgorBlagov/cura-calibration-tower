@@ -23,7 +23,6 @@ class GCodeDescr:
 
         return None
 
-
 GCodeDescr.LINEAR_MOTION_COMMAND          = GCodeDescr('G0',   [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
 GCodeDescr.LINEAR_MOTION_EXTRUDED_COMMAND = GCodeDescr('G1',   [('F', float), ('X', float), ('Y', float), ('Z', float), ('E', float)])
 GCodeDescr.SET_HOTENT_TEMP_COMMAND        = GCodeDescr('M104', [('B', int), ('F', type(None)), ('I', int), ('S', int), ('T', int)])
@@ -31,6 +30,7 @@ GCodeDescr.SET_FLOW_COMMAND               = GCodeDescr('M221', [('S', int), ('T'
 GCodeDescr.SET_FEEDRATE_COMMAND           = GCodeDescr('M220', [('S', int), ('B', type(None)), ('R', type(None))])
 GCodeDescr.SET_FAN_SPEED_COMMAND          = GCodeDescr('M106', [('I', int), ('P', int), ('S', int), ('T', int)])
 GCodeDescr.SET_LINEAR_ADVANCE_FACTOR      = GCodeDescr('M900', [('K', float), ('L', float), ('S', int), ('T', int)])
+
 class GCodeCommand:
     '''
     >>> GCodeCommand.parse('some line')
@@ -247,9 +247,10 @@ class PrinterHead:
 
 
 class HeightDetector:
-    def __init__(self, offset, step_size):
+    def __init__(self, offset, step_size, count):
         self._offset = offset
         self._step_size = step_size
+        self._count = count
         self._just_reached_new_step = False
         self._current_step = 0
 
@@ -268,6 +269,8 @@ class HeightDetector:
             return
 
         step = self._calculate_step(line, head, layer)
+        step = min(step, self._count)
+
         if step != self._current_step:
             self._just_reached_new_step = True
 
@@ -466,7 +469,7 @@ if __name__ == '__main__':
 
     with open('preprocessed.txt', 'w') as preprocessed:
         p = CalibrationProcessor(
-            LayerHeightDetector(2, 3), [
+            LayerHeightDetector(2, 3, 2), [
                 HotendTempProcessor(160, 10),
                 FlowProcessor(90, 2),
                 SpeedProcessor(95, 1),
