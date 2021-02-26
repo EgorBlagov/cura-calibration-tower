@@ -1,2 +1,4 @@
 orig.txt
 preprocessed.txt
+__pycache__/
+*.py[cod]
