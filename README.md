@@ -2,6 +2,10 @@
 
 This is a Script for **[Ultimaker's CURA](!https://github.com/Ultimaker/Cura)** **PostProcessing Plugin**, providing simple way to configure calibration towers (for retraction, nozzle temperature and so on...).
 
+# Disclaimer
+
+I didn't test every parameter, though it looks like everything works fine, I strongly recommend you to at least have a look on post processed code, to verify that changes in generated GCODE will work as you expect. **USE THIS PLUGIN AT YOUR OWN RISK**.
+
 # Features
 
 When you want to find out what retraction length you need, or what temperature works best for your filament you want to run some kind of tower from thingiverse, but in CURA you don't have simple option for that. You can use **ChangeAtZ** post processing script, but you'll have to add it 8-10 times and each time configure what option you want to change and at what layer/height. It's not handy enough.
